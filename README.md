@@ -1,9 +1,9 @@
-# hackertyper
+# hackertyper clone of (https://github.com/Lowdinggg/hackertyper.git)
 Quick and simple HackerTyper-like terminal application for linux and Powershell(not tested).
 
 # Building
 ```
-git clone https://github.com/Lowdinggg/hackertyper.git
+git clone https://github.com/Breinss/hackertyper.git
 ```
 ```
 cd hackertyper
