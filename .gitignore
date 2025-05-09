@@ -1,0 +1,64 @@
+# Compiled binaries
+hackertyper
+hackertyper.exe
+hackertyper_win
+hackertyper_win.exe
+hackertyper_cross
+hackertyper_cross.exe
+*.o
+*.obj
+*.out
+*.app
+
+# Build directories
+build/
+bin/
+obj/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Dependency directories
+vcpkg/
+packages/
+
+# CMake build files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Generated files
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Debug files
+*.debug
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Log files
+*.log
+logs/

