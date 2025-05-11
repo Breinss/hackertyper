@@ -7,6 +7,8 @@
 #include <string>
 #include <regex>
 #include <dirent.h>
+#include <libgen.h>  // Add this for dirname()
+#include <unistd.h>  // Add this for readlink()
 
 // OS-specific includes
 #ifdef _WIN32
@@ -17,6 +19,7 @@
     #include <termios.h>
     #include <unistd.h>
 #endif
+struct fullpath;
 
 // Function to list all matching files in a directory
 std::vector<std::string> listMatchingFiles(const std::string& directory, const std::string& pattern) {
@@ -30,6 +33,9 @@ std::vector<std::string> listMatchingFiles(const std::string& directory, const s
             std::string filename = entry->d_name;
             if (std::regex_match(filename, filePattern)) {
                 result.push_back(directory + "/" + filename);
+                struct fullpath;
+                std::string fullpath = directory + "/" + filename;
+                std::cout << "Found file: " << fullpath << std::endl;
             }
         }
         closedir(dir);
@@ -49,6 +55,18 @@ std::string readTextFromFile(const std::string& filename) {
     std::stringstream buffer;
     buffer << file.rdbuf();
     return buffer.str();
+}
+
+// Get executable directory
+std::string getExecutableDir() {
+    char result[PATH_MAX];
+    ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+    if (count != -1) {
+        std::string path(result, count);
+        char* dir = dirname(&path[0]);
+        return std::string(dir);
+    }
+    return "."; // Fallback to current directory if we can't determine
 }
 
 // Cross-platform functions for terminal handling
@@ -152,19 +170,170 @@ void resetTextColor() {
 }
 #endif
 
+// Function to display a progress bar
+void showProgressBar(const std::string& label, int duration_ms) {
+    std::cout << label;
+    const int width = 30;
+    for (int i = 0; i < width; i++) {
+        std::cout << "█";
+        std::cout.flush();
+        sleep_ms(duration_ms / width);
+    }
+    std::cout << " [COMPLETE]" << std::endl;
+}
+
+// Function to simulate typing text
+void typeText(const std::string& text, int delay_ms) {
+    for (char c : text) {
+        std::cout << c;
+        std::cout.flush();
+        sleep_ms(delay_ms);
+    }
+    std::cout << std::endl;
+}
+
+// Function to display a fake error
+void showFakeError() {
+    #ifdef _WIN32
+    setTextColor(FOREGROUND_RED | FOREGROUND_INTENSITY);
+    #else
+    std::cout << "\033[31;1m"; // Set bright red color on Unix/Linux
+    #endif
+    
+    std::cout << "\n*** ERROR 0x" << std::hex << (rand() % 0xFFFF) << ": Connection terminated" << std::endl;
+    std::cout << "*** Recalibrating network parameters..." << std::endl;
+    sleep_ms(1000);
+    std::cout << "*** Attempting bypass sequence..." << std::endl;
+    sleep_ms(800);
+    std::cout << "*** Rerouting through secondary node..." << std::endl;
+    sleep_ms(1200);
+    std::cout << "*** Connection reestablished" << std::endl << std::endl;
+    
+    resetTextColor();
+}
+
+// Function to display matrix-style rain effect
+void showMatrixRain(int duration_ms) {
+    clearScreen();
+    setGreenText();
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> charDist(33, 126); // ASCII printable characters
+    std::uniform_int_distribution<> posDist(0, 79);    // Screen width
+    
+    int end_time = duration_ms;
+    int current_time = 0;
+    int interval = 50; // Update interval in milliseconds
+    
+    while (current_time < end_time) {
+        // Clear screen occasionally
+        if (current_time % 500 == 0) {
+            clearScreen();
+        }
+        
+        // Display random characters
+        for (int i = 0; i < 10; i++) {
+            int x = posDist(gen);
+            char c = charDist(gen);
+            // Move cursor to random position and print char
+            std::cout << "\033[" << (current_time/100) % 24 << ";" << x << "H" << c;
+        }
+        
+        std::cout.flush();
+        sleep_ms(interval);
+        current_time += interval;
+    }
+    
+    clearScreen();
+    resetTextColor();
+}
+
+// Function to simulate IP scanning
+void simulateIPScan() {
+    setGreenText();
+    std::cout << "\nINITIATING NETWORK SCAN...\n" << std::endl;
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> ipDist(1, 255);
+    
+    for (int i = 0; i < 8; i++) {
+        std::string ip = std::to_string(ipDist(gen)) + "." + 
+                          std::to_string(ipDist(gen)) + "." + 
+                          std::to_string(ipDist(gen)) + "." + 
+                          std::to_string(ipDist(gen));
+        std::cout << "Probing " << ip << "... ";
+        sleep_ms(200);
+        
+        if (i == 5 || i == 7) { // Make a couple of IPs "vulnerable"
+            std::cout << "VULNERABLE" << std::endl;
+            sleep_ms(300);
+            std::cout << "  └─ Port 22: OPEN (SSH)" << std::endl;
+            sleep_ms(100);
+            std::cout << "  └─ Port 80: OPEN (HTTP)" << std::endl;
+            if (i == 7) {
+                sleep_ms(100);
+                std::cout << "  └─ Port 3306: OPEN (MySQL)" << std::endl;
+                sleep_ms(300);
+                std::cout << "\nTARGET SELECTED: " << ip << std::endl;
+            }
+        } else {
+            std::cout << "SECURE" << std::endl;
+        }
+    }
+    
+    resetTextColor();
+}
+
+// Function to show exit reminder
+void showExitReminder() {
+    int origRow, origCol;
+    // Save current cursor position (simplified)
+    origRow = 23; // Assuming a 24-line terminal
+    origCol = 0;
+    
+    // Go to bottom of screen
+    std::cout << "\033[" << origRow << ";0H";
+    setGrayText();
+    std::cout << "[ Press ESC to exit ]";
+    std::cout.flush();
+    
+    // Restore cursor position
+    std::cout << "\033[" << origRow - 3 << ";" << origCol << "H";
+    resetTextColor();
+}
+
 // Function to set up MS-DOS retro style
 void setupMSDOSStyle() {
     clearScreen();
     
     // Set light gray text (DOS-like colors)
     setGrayText();
-    
+    std::cout << std::endl;
+
     // Print DOS-like header
     std::cout << "C:\\>HACK.EXE" << std::endl;
     std::cout << "Microsoft(R) MS-DOS(R) Version 6.22" << std::endl;
     std::cout << "(C)Copyright Microsoft Corp 1981-1994." << std::endl << std::endl;
-    std::cout << "Initializing system breach protocol..." << std::endl;
-    std::cout << "Establishing secure connection..." << std::endl << std::endl;
+    
+    // Show progress indicators
+    typeText("Initializing system breach protocol...", 30);
+    showProgressBar("Loading encryption modules: ", 1200);
+    showProgressBar("Establishing secure connection: ", 800);
+    
+    // Add IP scanning for immersion
+    simulateIPScan();
+    
+    // Matrix effect transition
+    showMatrixRain(2000);
+    
+    // Show final screen
+    clearScreen();
+    setGrayText();
+    std::cout << "C:\\>HACK.EXE" << std::endl;
+    std::cout << "BREACH PROTOCOL INITIALIZED" << std::endl;
+    std::cout << "SYSTEM ACCESS: GRANTED" << std::endl << std::endl;
 }
 
 // Function to display text with proper formatting
@@ -191,12 +360,46 @@ int main(int argc, char* argv[]) {
         if (charsToAdd <= 0) charsToAdd = 5;
     }
     
-    // Get all hackertext files
-    std::vector<std::string> hackerTextFiles = listMatchingFiles(".", "hackertext[0-9]*.txt");
+    // Get the executable directory
+    std::string exeDir = getExecutableDir();
     
-    // If no files found, look for the original file
+    // Define search paths in order of preference
+    std::vector<std::string> searchPaths = {
+        ".",                          // Current directory
+        exeDir,                       // Executable directory
+        "/usr/local/share/hackertyper", // System-wide data directory
+        "/usr/share/hackertyper"      // Alternative system-wide data directory
+    };
+    
+    std::vector<std::string> hackerTextFiles;
+    
+    // Try each search path until we find files
+    for (const auto& path : searchPaths) {
+        hackerTextFiles = listMatchingFiles(path, "hackertext[0-9]*.txt");
+        if (!hackerTextFiles.empty()) {
+            std::cout << "Found files in: " << path << std::endl;
+            break;
+        }
+    }
+    
+    // If no files found, look for the original file in each path
     if (hackerTextFiles.empty()) {
-        hackerTextFiles.push_back("hackertext.txt");
+        for (const auto& path : searchPaths) {
+            std::string originalFile = path + "/hackertext.txt";
+            std::ifstream test(originalFile);
+            if (test.good()) {
+                hackerTextFiles.push_back(originalFile);
+                std::cout << "Using default file: " << originalFile << std::endl;
+                break;
+            }
+        }
+    }
+    
+    // If still no files found, give up
+    if (hackerTextFiles.empty()) {
+        std::cerr << "Error: Cannot find any hackertext files." << std::endl;
+        std::cerr << "Please make sure hackertext.txt exists in one of the search paths." << std::endl;
+        return 1;
     }
     
     // Randomly select a file
@@ -230,6 +433,9 @@ int main(int argc, char* argv[]) {
 
     // Main loop - run until user presses Esc (Windows) or Ctrl+C (Linux)
     bool running = true;
+    int keyPressCount = 0;
+    std::uniform_int_distribution<> errorDist(1, 100);
+    
     while (running) {
         // Check for keyboard input (non-blocking)
         if (kbhit()) {
@@ -265,12 +471,21 @@ int main(int argc, char* argv[]) {
                     i = 0;
                 }
                 
+                // Occasionally show fake errors (about 5% chance after 10 keypresses)
+                keyPressCount++;
+                if (keyPressCount > 10 && errorDist(gen) <= .5) {
+                    showFakeError();
+                    keyPressCount = 0;
+                }
+                
                 // Display text with proper formatting
                 displayText(text);
                 
                 // Add blinking cursor at the end
                 setGrayText();
                 std::cout << "_" << std::endl;
+                
+                // Show exit reminder
             }
         }
         
